@@ -1,0 +1,99 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "S3, Kinesis, SNS and DynamoDB",
+    "Parameters": {
+        "Email": {
+            "Description": "Email to receive notification from Lambda",
+            "Type": "String",
+            "Default": "redacted@mailinator.com"
+        },
+        "BucketName": {
+            "Description": "s3 Bucket to store code for Python script and Lambda",
+            "Type": "String",
+            "Default": "m03p02-7977"
+        }
+    },
+    "Resources": {
+        "MyDataBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "AccessControl": "PublicRead",
+                "BucketName": {
+                    "Ref": "BucketName"
+                }
+            }
+        },
+        "MyDynamoDB": {
+            "Type": "AWS::DynamoDB::Table",
+            "Properties": {
+                "AttributeDefinitions": [
+                    {
+                        "AttributeName": "deviceid",
+                        "AttributeType": "S"
+                    },
+                    {
+                        "AttributeName": "timestamp",
+                        "AttributeType": "S"
+                    }
+                ],
+                "KeySchema": [
+                    {
+                        "AttributeName": "deviceid",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "timestamp",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "TableName": "m03p02_anomaly_data",
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": "prod-db"
+                    }
+                ],
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 1,
+                    "WriteCapacityUnits": 1
+                }
+            }
+        },
+        "MyKinesisStream": {
+            "Type": "AWS::Kinesis::Stream",
+            "Properties": {
+                "Name": "m03p02_raw_data_stream",
+                "RetentionPeriodHours": 24,
+                "ShardCount": 1
+            }
+        },
+        "MySNSTopic": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "TopicName": "m03p02_anomaly_alerts",
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Ref": "Email"
+                        },
+                        "Protocol": "email"
+                    }
+                ]
+            }
+        }
+    },
+    "Outputs": {
+        "KinesisStream": {
+            "Description": "ARN of Kinesis stream",
+            "Value": {
+                "Fn::GetAtt": [
+                    "MyKinesisStream",
+                    "Arn"
+                ]
+            },
+            "Export": {
+                "Name": "KinesisARN"
+            }
+        }
+    }
+}

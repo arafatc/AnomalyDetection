@@ -1,0 +1,243 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "EC2, Codedeploy, Lambda function",
+  "Parameters": {
+    "InstanceType": {
+      "Description": "WebServer EC2 instance type",
+      "Type": "String",
+      "Default": "t2.micro"
+    },
+    "InstanceAMI": {
+      "Description": "EC2 instance AMI",
+      "Type": "String",
+      "Default": "ami-0d5eff06f840b45e9"
+    },
+    "BucketName": {
+      "Description": "s3 Bucket to store code for Python script and Lambda",
+      "Type": "String",
+      "Default": "m03p02-7977"
+    },
+    "VPCId": {
+      "Description": "Default VPC Id",
+      "Type": "AWS::EC2::VPC::Id",
+      "Default": "vpc-f005b28d"
+    },
+    "Lmultirole": {
+      "Description": "ARN of multirole access for AWSLambda - DynamoDBExecutionRole, KinesisExecutionRole, BasicExecutionRole, SNSFullAccess, DynamoDBPut",
+      "Type": "String",
+      "Default": "arn:aws:iam::123456789:role/service-role/lambda-multirole"
+    }
+  },
+  "Resources": {
+    "MySecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Enable SSH ingress",
+        "VpcId": {
+          "Ref": "VPCId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": "22",
+            "ToPort": "22",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      }
+    },
+    "MyInstance": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "ImageId": {
+          "Ref": "InstanceAMI"
+        },
+        "KeyName": "greatlearning",
+        "NetworkInterfaces": [
+          {
+            "GroupSet": [
+              {
+                "Ref": "MySecurityGroup"
+              }
+            ],
+            "AssociatePublicIpAddress": "true",
+            "DeviceIndex": "0",
+            "DeleteOnTermination": "true"
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "prod-server"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "\n",
+              [
+                "#!/bin/bash",
+                "sudo yum update",
+                "sudo curl -O https://bootstrap.pypa.io/get-pip.py",
+                "sudo python3 get-pip.py",
+                "sudo yum install ruby -y",
+                "sudo yum install wget",
+                "wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install",
+                "chmod +x ./install",
+                "sudo ./install auto",
+                "sudo service codedeploy-agent start"
+              ]
+            ]
+          }
+        },
+        "IamInstanceProfile": {
+          "Ref": "InstanceRoleInstanceProfile"
+        }
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "ec2.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/"
+      }
+    },
+    "InstanceRolePolicies": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "InstanceRole",
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "kinesis:PutRecord",
+                "kinesis:PutRecords",
+                "s3:Get*"
+              ],
+              "Resource": "*"
+            }
+          ]
+        },
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+    "InstanceRoleInstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Path": "/",
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      }
+    },
+    "CodeDeployRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "codedeploy.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "Policies": [
+          {
+            "PolicyName": "CodeDeployPolicy",
+            "PolicyDocument": {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:DescribeInstances",
+                    "ec2:DescribeInstanceStatus",
+                    "ec2:TerminateInstances",
+                    "tag:GetResources",
+                    "sns:Publish",
+                    "cloudwatch:DescribeAlarms",
+                    "cloudwatch:PutMetricAlarm"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AnomalyDetectorFn": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Handler": "anomaly_detection.lambda_handler",
+        "Role": {
+          "Ref": "Lmultirole"
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "BucketName"
+          },
+          "S3Key": "anomaly_detection.zip"
+        },
+        "Runtime": "python3.8",
+        "Timeout": 120,
+        "MemorySize": 256,
+        "TracingConfig": {
+          "Mode": "Active"
+        }
+      }
+    },
+    "MyKinesisStreamEventSource": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "AnomalyDetectorFn"
+        },
+        "Enabled": true,
+        "EventSourceArn": {
+          "Fn::ImportValue": "KinesisARN"
+        },
+        "StartingPosition": "TRIM_HORIZON"
+      }
+    }
+  },
+  "Outputs": {
+    "DeployRole": {
+      "Description": "Code Deploy Role for Stack",
+      "Value": {
+        "Ref": "CodeDeployRole"
+      }
+    }
+  }
+}
